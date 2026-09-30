@@ -4,19 +4,19 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { onAuthStateChanged, User } from 'firebase/auth';
-import { 
-  auth, 
-  getUserProfile, 
-  saveUserProfile, 
-  getBiomarkerReadings, 
-  addBiomarkerReading, 
-  deleteBiomarkerReading, 
-  getLabDocuments, 
-  saveLabDocument, 
-  deleteLabDocument, 
-  getDailyBioLogs, 
-  saveDailyBioLog, 
+import { onAuthStateChanged } from 'firebase/auth';
+import {
+  auth,
+  getUserProfile,
+  saveUserProfile,
+  getBiomarkerReadings,
+  addBiomarkerReading,
+  deleteBiomarkerReading,
+  getLabDocuments,
+  saveLabDocument,
+  deleteLabDocument,
+  getDailyBioLogs,
+  saveDailyBioLog,
   logoutUser,
   getInitialDemoBiomarkers,
   getInitialDemoLabDocs,
@@ -34,33 +34,56 @@ import { AuthModal } from './components/AuthModal';
 import { ProfileModal } from './components/ProfileModal';
 import { AddBiomarkerModal } from './components/AddBiomarkerModal';
 import { UploadLabModal } from './components/UploadLabModal';
-import { ShieldCheck, Heart, Sparkles, Activity } from 'lucide-react';
+import { ShieldCheck, Heart } from 'lucide-react';
+
+type AppTab = 'dashboard' | 'biomarkers' | 'lab_vault' | 'daily_log' | 'advisor';
+
+const DEFAULT_TAB: AppTab = 'dashboard';
+const APP_TABS = new Set<AppTab>(['dashboard', 'biomarkers', 'lab_vault', 'daily_log', 'advisor']);
+
+function getTabFromLocation(): AppTab {
+  const rawTab = window.location.hash.replace(/^#/, '') as AppTab;
+  return APP_TABS.has(rawTab) ? rawTab : DEFAULT_TAB;
+}
 
 export default function App() {
+  // Route boot starts from the URL so a refresh preserves the current view.
   const [currentUser, setCurrentUser] = useState<any | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
-  
+  const [activeTab, setActiveTab] = useState<AppTab>(() => getTabFromLocation());
+
   const [biomarkers, setBiomarkers] = useState<BiomarkerReading[]>([]);
   const [labDocs, setLabDocs] = useState<LabDocument[]>([]);
   const [dailyLogs, setDailyLogs] = useState<DailyBioLog[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Modals state
   const [isAuthOpen, setIsAuthOpen] = useState(false);
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isAddReadingOpen, setIsAddReadingOpen] = useState(false);
   const [isUploadLabOpen, setIsUploadLabOpen] = useState(false);
   const [preselectedBioId, setPreselectedBioId] = useState<string | undefined>(undefined);
 
-  // Auth observer
+  // Browser back/forward and manually edited hashes update the rendered tab.
+  useEffect(() => {
+    const handleRouteChange = () => setActiveTab(getTabFromLocation());
+    window.addEventListener('hashchange', handleRouteChange);
+    return () => window.removeEventListener('hashchange', handleRouteChange);
+  }, []);
+
+  // All in-app navigation is reflected in the URL without adding duplicate history entries.
+  useEffect(() => {
+    const nextHash = `#${activeTab}`;
+    if (window.location.hash !== nextHash) {
+      window.history.replaceState(null, '', nextHash);
+    }
+  }, [activeTab]);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         setCurrentUser(user);
         await loadUserData(user.uid, user.email || '', user.displayName || '');
       } else {
-        // Fallback to active demo guest account for immediate preview & usability
         const defaultUid = 'demo_user_longevity_pro';
         const demoUser = {
           uid: defaultUid,
@@ -79,7 +102,6 @@ export default function App() {
 
   const loadUserData = async (uid: string, email: string, displayName: string) => {
     try {
-      // 1. Load or initialize profile
       let userProf = await getUserProfile(uid);
       if (!userProf) {
         userProf = {
@@ -100,29 +122,17 @@ export default function App() {
         await saveUserProfile(userProf);
       }
       setProfile(userProf);
-
-      // 2. Load biomarkers
-      const bios = await getBiomarkerReadings(uid);
-      setBiomarkers(bios);
-
-      // 3. Load lab docs
-      const docs = await getLabDocuments(uid);
-      setLabDocs(docs);
-
-      // 4. Load daily logs
-      const logs = await getDailyBioLogs(uid);
-      setDailyLogs(logs);
-
+      setBiomarkers(await getBiomarkerReadings(uid));
+      setLabDocs(await getLabDocuments(uid));
+      setDailyLogs(await getDailyBioLogs(uid));
     } catch (err) {
       console.error('Error loading user data:', err);
     }
   };
 
-  // Compute calculated values
   const scoreBreakdown: SystemScoreBreakdown = calculateSystemScores(biomarkers, dailyLogs);
   const insights: BioBalanceInsight[] = generateBalanceInsights(biomarkers, dailyLogs);
 
-  // Handlers for data updates
   const handleAddBiomarker = async (reading: Omit<BiomarkerReading, 'id'>) => {
     const created = await addBiomarkerReading(reading);
     setBiomarkers(prev => [created, ...prev]);
@@ -161,16 +171,14 @@ export default function App() {
 
   const handleBatchAddBiomarkers = async (newReadings: Array<Omit<BiomarkerReading, 'id'>>) => {
     const addedList: BiomarkerReading[] = [];
-    for (const r of newReadings) {
-      const created = await addBiomarkerReading(r);
-      addedList.push(created);
+    for (const reading of newReadings) {
+      addedList.push(await addBiomarkerReading(reading));
     }
     setBiomarkers(prev => [...addedList, ...prev]);
   };
 
   const handleLogout = async () => {
     await logoutUser();
-    // Switch to clean demo profile
     const defaultUid = 'demo_user_longevity_pro';
     const demoUser = {
       uid: defaultUid,
@@ -180,6 +188,7 @@ export default function App() {
     };
     setCurrentUser(demoUser);
     await loadUserData(defaultUid, demoUser.email, demoUser.displayName);
+    setActiveTab(DEFAULT_TAB);
   };
 
   const handleAuthSuccess = async (user: any) => {
@@ -203,8 +212,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-emerald-100 selection:text-emerald-900">
-      
-      {/* Top Sticky Navigation */}
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -222,7 +229,6 @@ export default function App() {
         onLogout={handleLogout}
       />
 
-      {/* Main View Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-6">
         {activeTab === 'dashboard' && (
           <DashboardView
@@ -232,7 +238,7 @@ export default function App() {
             dailyLogs={dailyLogs}
             scoreBreakdown={scoreBreakdown}
             insights={insights}
-            onNavigateTab={(tab) => setActiveTab(tab)}
+            onNavigateTab={(tab) => setActiveTab(tab as AppTab)}
             onOpenAddReading={(bioId) => {
               setPreselectedBioId(bioId);
               setIsAddReadingOpen(true);
@@ -283,61 +289,24 @@ export default function App() {
         )}
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-slate-200 bg-white py-6 mt-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-slate-500 font-medium">
           <div className="flex items-center gap-2">
-            <div className="w-5 h-5 rounded-md bg-emerald-600 flex items-center justify-center text-white text-[10px] font-black">
-              B
-            </div>
+            <div className="w-5 h-5 rounded-md bg-emerald-600 flex items-center justify-center text-white text-[10px] font-black">B</div>
             <span className="font-bold text-slate-800">BIO BALANCE</span>
             <span>• Personal Biomarker & Health Intelligence</span>
           </div>
-
           <div className="flex items-center gap-4">
-            <span className="flex items-center gap-1 text-emerald-700 font-bold">
-              <ShieldCheck className="w-4 h-4" />
-              <span>Patient Data Partitioned & Encrypted</span>
-            </span>
+            <span className="flex items-center gap-1 text-emerald-700 font-bold"><ShieldCheck className="w-4 h-4" /><span>Patient Data Partitioned & Encrypted</span></span>
             <span>v2.4.0</span>
           </div>
         </div>
       </footer>
 
-      {/* Modals */}
-      <AuthModal
-        isOpen={isAuthOpen}
-        onClose={() => setIsAuthOpen(false)}
-        onSuccess={handleAuthSuccess}
-      />
-
-      <ProfileModal
-        isOpen={isProfileOpen}
-        onClose={() => setIsProfileOpen(false)}
-        profile={profile}
-        onUpdateProfile={(updated) => setProfile(updated)}
-        allBiomarkers={biomarkers}
-        allDocs={labDocs}
-        allLogs={dailyLogs}
-      />
-
-      <AddBiomarkerModal
-        isOpen={isAddReadingOpen}
-        onClose={() => setIsAddReadingOpen(false)}
-        userId={currentUser?.uid || 'demo'}
-        onAddReading={handleAddBiomarker}
-        availableDocs={labDocs}
-        preselectedBiomarkerId={preselectedBioId}
-      />
-
-      <UploadLabModal
-        isOpen={isUploadLabOpen}
-        onClose={() => setIsUploadLabOpen(false)}
-        userId={currentUser?.uid || 'demo'}
-        onSaveLabDocument={handleSaveLabDoc}
-        onBatchAddBiomarkers={handleBatchAddBiomarkers}
-      />
-
+      <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} onSuccess={handleAuthSuccess} />
+      <ProfileModal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} profile={profile} onUpdateProfile={(updated) => setProfile(updated)} allBiomarkers={biomarkers} allDocs={labDocs} allLogs={dailyLogs} />
+      <AddBiomarkerModal isOpen={isAddReadingOpen} onClose={() => setIsAddReadingOpen(false)} userId={currentUser?.uid || 'demo'} onAddReading={handleAddBiomarker} availableDocs={labDocs} preselectedBiomarkerId={preselectedBioId} />
+      <UploadLabModal isOpen={isUploadLabOpen} onClose={() => setIsUploadLabOpen(false)} userId={currentUser?.uid || 'demo'} onSaveLabDocument={handleSaveLabDoc} onBatchAddBiomarkers={handleBatchAddBiomarkers} />
     </div>
   );
 }
